@@ -1646,6 +1646,7 @@ void nf_conntrack_init_end(void)
 int nf_conntrack_init_net(struct net *net)
 {
 	int ret;
+	static atomic64_t unique_id;
 
 	atomic_set(&net->ct.count, 0);
 	INIT_HLIST_NULLS_HEAD(&net->ct.unconfirmed, UNCONFIRMED_NULLS_VAL);
@@ -1657,7 +1658,8 @@ int nf_conntrack_init_net(struct net *net)
 		goto err_stat;
 	}
 
-	net->ct.slabname = kasprintf(GFP_KERNEL, "nf_conntrack_%pK", net);
+	net->ct.slabname = kasprintf(GFP_KERNEL, "nf_conntrack_%llu",
+				(u64)atomic64_inc_return(&unique_id));
 	if (!net->ct.slabname) {
 		ret = -ENOMEM;
 		goto err_slabname;
