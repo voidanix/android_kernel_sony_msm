@@ -69,6 +69,7 @@
 
 #ifdef CONFIG_BT_MSM_SLEEP
 #include <net/bluetooth/bluesleep.h>
+#include <../drivers/bluetooth/bcm43xx.h>
 #endif
 
 #include "msm_serial_hs_hwreg.h"
@@ -309,6 +310,11 @@ static int msm_hs_ioctl(struct uart_port *uport, unsigned int cmd,
 	if (!msm_uport)
 		return -ENODEV;
 
+	if(!bcm43xx_may_use_bluesleep()) {
+		/* the device has been rfkill-ed */
+		return -ENODEV;
+	}
+
 	switch (cmd) {
 	case MSM_ENABLE_UART_CLOCK: {
 		ret = msm_hs_request_clock_on(&msm_uport->uport);
@@ -342,6 +348,8 @@ static int msm_hs_ioctl(struct uart_port *uport, unsigned int cmd,
 		break;
 	}
 	}
+
+	bcm43xx_done_accessing_bluesleep();
 
 	return ret;
 }
@@ -1445,7 +1453,14 @@ static void msm_hs_submit_tx_locked(struct uart_port *uport)
 
 	/* Notify the bluesleep driver of outgoing data, if available. */
 #if defined(CONFIG_BT_MSM_SLEEP) && !defined(CONFIG_LINE_DISCIPLINE_DRIVER)
+	if(!bcm43xx_may_use_bluesleep()) {
+		/* device has been shutdown */
+		return;
+	}
+
 	bluesleep_outgoing_data();
+
+	bcm43xx_done_accessing_bluesleep();
 #endif
 
 	MSM_HS_DBG("%s:Enqueue Tx Cmd, ret %d\n", __func__, ret);

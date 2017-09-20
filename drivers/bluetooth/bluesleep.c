@@ -80,7 +80,8 @@
 #define HS_UART_OFF 0
 #define BT_PORT_ID	0
 
-#define BT_BLUEDROID_SUPPORT 1
+/* this define currently has no effect */
+#define BT_BLUEDROID_SUPPORT 0
 enum {
 	DEBUG_USER_STATE = 1U << 0,
 	DEBUG_SUSPEND = 1U << 1,
@@ -670,6 +671,9 @@ static int bluesleep_probe(struct platform_device *pdev)
 
 	bsi->uport = msm_hs_get_uart_port(BT_PORT_ID);
 
+	/* otherwise we get an unbalanced irq enable */
+	/* when bluetooth is enabled for the first time. */
+	disable_irq(bsi->host_wake_irq);
 	atomic_set(&bsi->wakeup_irq_disabled, 1);
 	return 0;
 

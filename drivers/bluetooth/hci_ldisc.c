@@ -44,6 +44,9 @@
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
 
+#include <net/bluetooth/bluesleep.h>
+
+#include "bcm43xx.h"
 #include "hci_uart.h"
 
 #define VERSION "2.2"
@@ -147,8 +150,20 @@ restart:
 	while ((skb = hci_uart_dequeue(hu))) {
 		int len;
 
+		if(!bcm43xx_may_use_bluesleep()) {
+			/* device has been shutdown */
+			clear_bit(HCI_UART_SENDING, &hu->tx_state);
+			return;
+		}
+
 		set_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
+
+		bluesleep_outgoing_data();
+
 		len = tty->ops->write(tty, skb->data, skb->len);
+
+		bcm43xx_done_accessing_bluesleep();
+
 		hdev->stat.byte_tx += len;
 
 		skb_pull(skb, len);
