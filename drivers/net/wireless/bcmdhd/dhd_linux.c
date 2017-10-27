@@ -4425,6 +4425,9 @@ dhd_open(struct net_device *net)
 	dhd_dbgfs_init(&dhd->pub);
 #endif
 
+	/* Clear, carrier, set when connected or AP mode. */
+	netif_carrier_off(net);
+
 	OLD_MOD_INC_USE_COUNT;
 exit:
 	if (ret)

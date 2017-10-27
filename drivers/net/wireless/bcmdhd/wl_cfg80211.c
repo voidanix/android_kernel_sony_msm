@@ -646,6 +646,8 @@ extern int dhd_wait_pend8021x(struct net_device *dev);
 extern int disable_proptx;
 #endif /* PROP_TXSTATUS_VSDB */
 
+extern int op_mode;
+
 #if (WL_DBG_LEVEL > 0)
 #define WL_DBG_ESTR_MAX	50
 static s8 wl_dbg_estr[][WL_DBG_ESTR_MAX] = {
@@ -6682,6 +6684,10 @@ wl_cfg80211_bcn_bringup_ap(
 			WL_ERR(("WLC_DOWN error %d\n", err));
 			goto exit;
 		}
+
+		// this is required to make the SSID visible to others.
+		wldev_iovar_setint(dev, "apsta", 0);
+
 		err = wldev_ioctl(dev, WLC_SET_INFRA, &infra, sizeof(s32), true);
 		if (err < 0) {
 			WL_ERR(("SET INFRA error %d\n", err));
@@ -7003,6 +7009,14 @@ wl_cfg80211_start_ap(
 	s32 bssidx = 0;
 	u32 dev_role = 0;
 
+	// lets switch to HOSTAP mode
+	op_mode = DHD_FLAG_HOSTAP_MODE;
+	((dhd_pub_t*)cfg->pub)->op_mode = DHD_FLAG_HOSTAP_MODE;
+	dev->operstate = IF_OPER_UP;
+
+	dhd_arp_offload_set(cfg->pub, 0);
+	dhd_arp_offload_enable(cfg->pub, 0);
+
 	WL_DBG(("Enter \n"));
 	if (dev == bcmcfg_to_prmry_ndev(cfg)) {
 		WL_DBG(("Start AP req on primary iface: Softap\n"));
@@ -7096,6 +7110,9 @@ wl_cfg80211_start_ap(
 		}
 	}
 
+	if(!netif_carrier_ok(dev))
+		netif_carrier_on(dev);
+
 fail:
 	if (err) {
 		WL_ERR(("ADD/SET beacon failed\n"));
@@ -7141,6 +7158,10 @@ wl_cfg80211_stop_ap(
 	if (!check_dev_role_integrity(cfg, dev_role))
 		goto exit;
 
+	// lets switch to STA mode
+	op_mode = DHD_FLAG_STA_MODE;
+	((dhd_pub_t*)cfg->pub)->op_mode = DHD_FLAG_STA_MODE;
+
 	if (dev_role == NL80211_IFTYPE_AP) {
 		/* SoftAp on primary Interface.
 		 * Shut down AP and turn on MPC
@@ -7156,6 +7177,16 @@ wl_cfg80211_stop_ap(
 			err = -ENOTSUPP;
 			goto exit;
 		}
+
+		err = wldev_ioctl(dev, WLC_DOWN, &ap, sizeof(s32), true);
+		if (err < 0) {
+			WL_ERR(("WLC_DOWN error %d\n", err));
+			err = -EINVAL;
+			goto exit;
+		}
+
+		// don't go into p2p mode.
+		wldev_iovar_setint(dev, "apsta", 1);
 
 		err = wldev_ioctl(dev, WLC_UP, &ap, sizeof(s32), true);
 		if (unlikely(err)) {
@@ -7174,6 +7205,11 @@ wl_cfg80211_stop_ap(
 			kfree(cfg->ap_info);
 			cfg->ap_info = NULL;
 		}
+
+		dhd_arp_offload_set(cfg->pub, ARP_OL_AGENT | ARP_OL_PEER_AUTO_REPLY);
+		dhd_arp_offload_enable(cfg->pub, 1);
+
+		wl_set_mode_by_netdev(cfg, dev, WL_MODE_BSS);
 	} else {
 		WL_DBG(("Stopping P2P GO \n"));
 		DHD_OS_WAKE_LOCK_CTRL_TIMEOUT_ENABLE((dhd_pub_t *)(cfg->pub),
@@ -7182,6 +7218,8 @@ wl_cfg80211_stop_ap(
 	}
 
 exit:
+	if(netif_carrier_ok(dev))
+		netif_carrier_off(dev);
 	return err;
 }
 
@@ -8690,6 +8728,9 @@ wl_notify_connect_status(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 			}
 			wl_update_prof(cfg, ndev, e, &act, WL_PROF_ACT);
 			wl_update_prof(cfg, ndev, NULL, (void *)&e->addr, WL_PROF_BSSID);
+
+			if(!netif_carrier_ok(ndev))
+				netif_carrier_on(ndev);
 		} else if (wl_is_linkdown(cfg, e)) {
 			if (cfg->scan_request)
 				wl_notify_escan_complete(cfg, ndev, true, true);
@@ -8758,6 +8799,9 @@ wl_notify_connect_status(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 			/* if link down, bsscfg is diabled */
 			if (ndev != bcmcfg_to_prmry_ndev(cfg))
 				complete(&cfg->iface_disable);
+
+			if(netif_carrier_ok(ndev))
+				netif_carrier_off(ndev);
 
 		} else if (wl_is_nonetwork(cfg, e)) {
 			WL_ERR(("connect failed event=%d e->status %d e->reason %d\n",
@@ -8862,8 +8906,11 @@ wl_notify_roaming_status(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 	if ((event == WLC_E_ROAM || event == WLC_E_BSSID) && status == WLC_E_STATUS_SUCCESS) {
 		if (wl_get_drv_status(cfg, CONNECTED, ndev))
 			wl_bss_roaming_done(cfg, ndev, e, data);
-		else
+		else {
 			wl_bss_connect_done(cfg, ndev, e, data, true);
+			if(!netif_carrier_ok(ndev))
+				netif_carrier_on(ndev);
+		}
 		act = true;
 		wl_update_prof(cfg, ndev, e, &act, WL_PROF_ACT);
 		wl_update_prof(cfg, ndev, NULL, (void *)&e->addr, WL_PROF_BSSID);
