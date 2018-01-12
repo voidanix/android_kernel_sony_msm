@@ -712,6 +712,17 @@ config TOF_SENSOR
           To compile this driver as a module, choose M here: the
           module will be called tof_sensor.
 
+config MEMNOTIFY
+        tristate "Enables memory notification pseudo-device"
+        default n
+        help
+          This option enables pseudo-device /dev/memnotify for tracking
+          system memory utilization and updating state to subscribed clients
+          when specified threshold reached.
+
+          Say Y here if you want to support memory monitoring.
+          If unsure, say N.
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
