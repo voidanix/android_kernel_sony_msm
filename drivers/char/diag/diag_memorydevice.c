@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -37,7 +37,6 @@ struct diag_md_info diag_md[NUM_DIAG_MD_DEV] = {
 		.ctx = 0,
 		.mempool = POOL_TYPE_MUX_APPS,
 		.num_tbl_entries = 0,
-		.md_info_inited = 0,
 		.tbl = NULL,
 		.ops = NULL,
 	},
@@ -47,7 +46,6 @@ struct diag_md_info diag_md[NUM_DIAG_MD_DEV] = {
 		.ctx = 0,
 		.mempool = POOL_TYPE_MDM_MUX,
 		.num_tbl_entries = 0,
-		.md_info_inited = 0,
 		.tbl = NULL,
 		.ops = NULL,
 	},
@@ -56,7 +54,6 @@ struct diag_md_info diag_md[NUM_DIAG_MD_DEV] = {
 		.ctx = 0,
 		.mempool = POOL_TYPE_MDM2_MUX,
 		.num_tbl_entries = 0,
-		.md_info_inited = 0,
 		.tbl = NULL,
 		.ops = NULL,
 	},
@@ -65,7 +62,6 @@ struct diag_md_info diag_md[NUM_DIAG_MD_DEV] = {
 		.ctx = 0,
 		.mempool = POOL_TYPE_QSC_MUX,
 		.num_tbl_entries = 0,
-		.md_info_inited = 0,
 		.tbl = NULL,
 		.ops = NULL,
 	}
@@ -89,8 +85,6 @@ void diag_md_open_all(void)
 
 	for (i = 0; i < NUM_DIAG_MD_DEV; i++) {
 		ch = &diag_md[i];
-		if (!ch->md_info_inited)
-			continue;
 		if (ch->ops && ch->ops->open)
 			ch->ops->open(ch->ctx, DIAG_MEMORY_DEVICE_MODE);
 	}
@@ -105,8 +99,6 @@ void diag_md_close_all(void)
 
 	for (i = 0; i < NUM_DIAG_MD_DEV; i++) {
 		ch = &diag_md[i];
-		if (!ch->md_info_inited)
-			continue;
 
 		if (ch->ops && ch->ops->close)
 			ch->ops->close(ch->ctx, DIAG_MEMORY_DEVICE_MODE);
@@ -137,10 +129,11 @@ void diag_md_close_all(void)
 
 int diag_md_write(int id, unsigned char *buf, int len, int ctx)
 {
-	int i, peripheral, pid = 0;
+	int i;
 	uint8_t found = 0;
 	unsigned long flags;
 	struct diag_md_info *ch = NULL;
+	int peripheral;
 	struct diag_md_session_t *session_info = NULL;
 
 	if (id < 0 || id >= NUM_DIAG_MD_DEV || id >= DIAG_NUM_PROC)
@@ -153,30 +146,21 @@ int diag_md_write(int id, unsigned char *buf, int len, int ctx)
 	if (peripheral < 0)
 		return -EINVAL;
 
-	mutex_lock(&driver->md_session_lock);
-	session_info = diag_md_session_get_peripheral(peripheral);
-	if (!session_info) {
-		mutex_unlock(&driver->md_session_lock);
+	session_info =
+		diag_md_session_get_peripheral(peripheral);
+	if (!session_info)
 		return -EIO;
-	}
-	pid = session_info->pid;
-	mutex_unlock(&driver->md_session_lock);
 
 	ch = &diag_md[id];
-	if (!ch || !ch->md_info_inited)
-		return -EINVAL;
 
 	spin_lock_irqsave(&ch->lock, flags);
 	for (i = 0; i < ch->num_tbl_entries && !found; i++) {
 		if (ch->tbl[i].buf != buf)
 			continue;
 		found = 1;
-		pr_err_ratelimited("diag: trying to write the same buffer buf: %pK, len: %d, back to the table for p: %d, t: %d, buf_num: %d, proc: %d, i: %d\n",
-				   buf, ch->tbl[i].len, GET_BUF_PERIPHERAL(ctx),
-				   GET_BUF_TYPE(ctx), GET_BUF_NUM(ctx), id, i);
-		ch->tbl[i].buf = NULL;
-		ch->tbl[i].len = 0;
-		ch->tbl[i].ctx = 0;
+		pr_err_ratelimited("diag: trying to write the same buffer buf: %pK, ctxt: %d len: %d at i: %d back to the table, proc: %d, mode: %d\n",
+				   buf, ctx, ch->tbl[i].len,
+				   i, id, driver->logging_mode);
 	}
 	spin_unlock_irqrestore(&ch->lock, flags);
 
@@ -203,15 +187,13 @@ int diag_md_write(int id, unsigned char *buf, int len, int ctx)
 
 	found = 0;
 	for (i = 0; i < driver->num_clients && !found; i++) {
-		if ((driver->client_map[i].pid != pid) ||
+		if ((driver->client_map[i].pid !=
+		     session_info->pid) ||
 		    (driver->client_map[i].pid == 0))
 			continue;
 
 		found = 1;
-		if (!(driver->data_ready[i] & USER_SPACE_DATA_TYPE)) {
-			driver->data_ready[i] |= USER_SPACE_DATA_TYPE;
-			atomic_inc(&driver->data_ready_notif[i]);
-		}
+		driver->data_ready[i] |= USER_SPACE_DATA_TYPE;
 		pr_debug("diag: wake up logging process\n");
 		wake_up_interruptible(&driver->wait_q);
 	}
@@ -240,11 +222,9 @@ int diag_md_copy_to_user(char __user *buf, int *pret, size_t buf_size,
 
 	for (i = 0; i < NUM_DIAG_MD_DEV && !err; i++) {
 		ch = &diag_md[i];
-		if (!ch->md_info_inited)
-			continue;
 		for (j = 0; j < ch->num_tbl_entries && !err; j++) {
 			entry = &ch->tbl[j];
-			if (entry->len <= 0 || entry->buf == NULL)
+			if (entry->len <= 0)
 				continue;
 
 			peripheral = diag_md_get_peripheral(entry->ctx);
@@ -362,8 +342,6 @@ int diag_md_close_peripheral(int id, uint8_t peripheral)
 		return -EINVAL;
 
 	ch = &diag_md[id];
-	if (!ch || !ch->md_info_inited)
-		return -EINVAL;
 
 	spin_lock_irqsave(&ch->lock, flags);
 	for (i = 0; i < ch->num_tbl_entries && !found; i++) {
@@ -396,12 +374,11 @@ int diag_md_init(void)
 	int i, j;
 	struct diag_md_info *ch = NULL;
 
-	for (i = 0; i < DIAG_MD_LOCAL_LAST; i++) {
+	for (i = 0; i < NUM_DIAG_MD_DEV; i++) {
 		ch = &diag_md[i];
 		ch->num_tbl_entries = diag_mempools[ch->mempool].poolsize;
-		ch->tbl = kzalloc(ch->num_tbl_entries *
-				  sizeof(struct diag_buf_tbl_t),
-				  GFP_KERNEL);
+		ch->tbl = kcalloc(ch->num_tbl_entries,
+				  sizeof(struct diag_buf_tbl_t), GFP_KERNEL);
 		if (!ch->tbl)
 			goto fail;
 
@@ -411,7 +388,6 @@ int diag_md_init(void)
 			ch->tbl[j].ctx = 0;
 		}
 		spin_lock_init(&(ch->lock));
-		ch->md_info_inited = 1;
 	}
 
 	return 0;
@@ -421,54 +397,12 @@ fail:
 	return -ENOMEM;
 }
 
-int diag_md_mdm_init(void)
-{
-	int i, j;
-	struct diag_md_info *ch = NULL;
-
-	for (i = DIAG_MD_BRIDGE_BASE; i < NUM_DIAG_MD_DEV; i++) {
-		ch = &diag_md[i];
-		ch->num_tbl_entries = diag_mempools[ch->mempool].poolsize;
-		ch->tbl = kcalloc(ch->num_tbl_entries, sizeof(*ch->tbl),
-				GFP_KERNEL);
-		if (!ch->tbl)
-			goto fail;
-
-		for (j = 0; j < ch->num_tbl_entries; j++) {
-			ch->tbl[j].buf = NULL;
-			ch->tbl[j].len = 0;
-			ch->tbl[j].ctx = 0;
-		}
-		spin_lock_init(&(ch->lock));
-		ch->md_info_inited = 1;
-	}
-
-	return 0;
-
-fail:
-	diag_md_mdm_exit();
-	return -ENOMEM;
-}
-
 void diag_md_exit(void)
 {
 	int i;
 	struct diag_md_info *ch = NULL;
 
-	for (i = 0; i < DIAG_MD_LOCAL_LAST; i++) {
-		ch = &diag_md[i];
-		kfree(ch->tbl);
-		ch->num_tbl_entries = 0;
-		ch->ops = NULL;
-	}
-}
-
-void diag_md_mdm_exit(void)
-{
-	int i;
-	struct diag_md_info *ch = NULL;
-
-	for (i = DIAG_MD_BRIDGE_BASE; i < NUM_DIAG_MD_DEV; i++) {
+	for (i = 0; i < NUM_DIAG_MD_DEV; i++) {
 		ch = &diag_md[i];
 		kfree(ch->tbl);
 		ch->num_tbl_entries = 0;
