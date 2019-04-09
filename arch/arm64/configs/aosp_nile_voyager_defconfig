@@ -814,3 +814,5 @@ CONFIG_BT_HCIVHCI=y
 CONFIG_ANDROID_BINDER_DEVICES="binder,vndbinder,hwbinder,puddlejumper,vndpuddlejumper"
 CONFIG_CGROUP_SCHEDTUNE=n
 
+CONFIG_WLAN_TX_FLOW_CONTROL_V2=y
+
