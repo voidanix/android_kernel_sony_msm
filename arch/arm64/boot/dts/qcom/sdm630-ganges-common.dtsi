@@ -81,6 +81,7 @@
 		et51x,gpio_irq = <&tlmm 72 0>;
 		vdd_ana-supply = <&pm660l_l6>;
 		et51x,no-low-voltage-probe;
+		et51x,enable-on-boot;
 
 		spi-max-frequency = <1000000>;
 
