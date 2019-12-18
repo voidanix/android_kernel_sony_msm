@@ -931,7 +931,5 @@ CONFIG_BT_HIDP=y
 CONFIG_ANDROID_BINDER_DEVICES="binder,vndbinder,hwbinder,puddlejumper,vndpuddlejumper"
 CONFIG_CGROUP_SCHEDTUNE=n
 
-# hybris: usb networking
-CONFIG_USB_CONFIGFS_QCRNDIS=y
-CONFIG_USB_CONFIGFS_RMNET_BAM=y
+# hybris: usb mass storage
 CONFIG_USB_CONFIGFS_MASS_STORAGE=y
