@@ -101,19 +101,6 @@ void fuse_request_free(struct fuse_req *req)
 	kmem_cache_free(fuse_req_cachep, req);
 }
 
-static void block_sigs(sigset_t *oldset)
-{
-	sigset_t mask;
-
-	siginitsetinv(&mask, sigmask(SIGKILL));
-	sigprocmask(SIG_BLOCK, &mask, oldset);
-}
-
-static void restore_sigs(sigset_t *oldset)
-{
-	sigprocmask(SIG_SETMASK, oldset, NULL);
-}
-
 void __fuse_get_request(struct fuse_req *req)
 {
 	atomic_inc(&req->count);
@@ -147,9 +134,13 @@ static bool fuse_block_alloc(struct fuse_conn *fc, bool for_background)
 
 static void fuse_drop_waiting(struct fuse_conn *fc)
 {
-	if (fc->connected) {
-		atomic_dec(&fc->num_waiting);
-	} else if (atomic_dec_and_test(&fc->num_waiting)) {
+	/*
+	 * lockess check of fc->connected is okay, because atomic_dec_and_test()
+	 * provides a memory barrier mached with the one in fuse_wait_aborted()
+	 * to ensure no wake-up is missed.
+	 */
+	if (atomic_dec_and_test(&fc->num_waiting) &&
+	    !READ_ONCE(fc->connected)) {
 		/* wake up aborters */
 		wake_up_all(&fc->blocked_waitq);
 	}
@@ -163,15 +154,9 @@ static struct fuse_req *__fuse_get_req(struct fuse_conn *fc, unsigned npages,
 	atomic_inc(&fc->num_waiting);
 
 	if (fuse_block_alloc(fc, for_background)) {
-		sigset_t oldset;
-		int intr;
-
-		block_sigs(&oldset);
-		intr = wait_event_interruptible_exclusive(fc->blocked_waitq,
-				!fuse_block_alloc(fc, for_background));
-		restore_sigs(&oldset);
 		err = -EINTR;
-		if (intr)
+		if (wait_event_killable_exclusive(fc->blocked_waitq,
+				!fuse_block_alloc(fc, for_background)))
 			goto out;
 	}
 	/* Matches smp_wmb() in fuse_set_initialized() */
@@ -470,14 +455,9 @@ static void request_wait_answer(struct fuse_conn *fc, struct fuse_req *req)
 	}
 
 	if (!test_bit(FR_FORCE, &req->flags)) {
-		sigset_t oldset;
-
 		/* Only fatal signals may interrupt this */
-		block_sigs(&oldset);
-		err = wait_event_interruptible(req->waitq,
+		err = wait_event_killable(req->waitq,
 					test_bit(FR_FINISHED, &req->flags));
-		restore_sigs(&oldset);
-
 		if (!err)
 			return;
 
@@ -2198,6 +2178,8 @@ EXPORT_SYMBOL_GPL(fuse_abort_conn);
 
 void fuse_wait_aborted(struct fuse_conn *fc)
 {
+	/* matches implicit memory barrier in fuse_drop_waiting() */
+	smp_mb();
 	wait_event(fc->blocked_waitq, atomic_read(&fc->num_waiting) == 0);
 }
 

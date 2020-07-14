@@ -144,7 +144,7 @@ static int update_config(struct clk_rcg2 *rcg)
 	}
 
 	WARN(1, "clk: %s: rcg didn't update its configuration.", name);
-	return 0;
+	return -EBUSY;
 }
 
 static int clk_rcg2_set_parent(struct clk_hw *hw, u8 index)
@@ -1458,8 +1458,11 @@ static int clk_gfx3d_src_set_rate_and_parent(struct clk_hw *hw,
 {
 	struct clk_rcg2 *rcg = to_clk_rcg2(hw);
 	const struct freq_tbl *f;
-	u32 cfg;
+	u32 cfg, old_cfg;
 	int ret;
+
+	/* Read back the old configuration */
+	regmap_read(rcg->clkr.regmap, rcg->cmd_rcgr + CFG_REG, &old_cfg);
 
 	cfg = rcg->parent_map[index].cfg << CFG_SRC_SEL_SHIFT;
 
