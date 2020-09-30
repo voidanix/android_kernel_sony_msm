@@ -22,6 +22,7 @@
 #include <linux/random.h>
 #include <soc/qcom/glink.h>
 #include <soc/qcom/subsystem_notif.h>
+#include <soc/qcom/subsystem_restart.h>
 #include "glink_private.h"
 
 #define GLINK_SSR_REPLY_TIMEOUT	HZ
@@ -676,6 +677,9 @@ int notify_for_subsystem(struct subsys_info *ss_info)
 			GLINK_SSR_ERR("%s %s: Subsystem %s %s\n",
 				"<SSR>", __func__, ss_leaf_entry->edge,
 				"failed to respond. Restarting.");
+
+			if (!strcmp(ss_leaf_entry->ssr_name, "adsp"))
+				subsystem_restart("adsp");
 
 			notifications_successful = false;
 
