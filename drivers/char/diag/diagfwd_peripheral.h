@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -18,16 +18,9 @@
 #define MAX_PERIPHERAL_HDLC_BUF_SZ	65539
 
 #define TRANSPORT_UNKNOWN		-1
-#ifdef CONFIG_DIAG_USES_SMD
-#define TRANSPORT_SMD			0
-#define TRANSPORT_SOCKET		1
-#define TRANSPORT_GLINK			2
-#define NUM_TRANSPORT			3
-#else
 #define TRANSPORT_SOCKET		0
 #define TRANSPORT_GLINK			1
 #define NUM_TRANSPORT			2
-#endif
 #define NUM_WRITE_BUFFERS		2
 #define PERIPHERAL_MASK(x)					\
 	((x == PERIPHERAL_MODEM) ? DIAG_CON_MPSS :		\
@@ -65,15 +58,8 @@ struct diag_peripheral_ops {
 	void (*open)(void *ctxt);
 	void (*close)(void *ctxt);
 	int (*write)(void *ctxt, unsigned char *buf, int len);
-	int (*read)(void *ctxt, unsigned char *buf, int len,
-			struct diagfwd_buf_t *fwd_buf);
+	int (*read)(void *ctxt, unsigned char *buf, int len);
 	void (*queue_read)(void *ctxt);
-};
-
-struct diag_id_info {
-	uint8_t diagid_val;
-	uint8_t pd;
-	char *reg_str;
 };
 
 struct diagfwd_info {
@@ -83,6 +69,8 @@ struct diagfwd_info {
 	uint8_t inited;
 	uint8_t ch_open;
 	uint8_t num_pd;
+	uint8_t diagid_root;
+	uint8_t diagid_user[MAX_PERIPHERAL_UPD];
 	int cpd_len_1;
 	int cpd_len_2;
 	int upd_len[MAX_PERIPHERAL_UPD][2];
@@ -93,8 +81,6 @@ struct diagfwd_info {
 	struct mutex buf_mutex;
 	struct mutex data_mutex;
 	void *ctxt;
-	struct diag_id_info root_diag_id;
-	struct diag_id_info upd_diag_id[MAX_PERIPHERAL_UPD];
 	struct diagfwd_buf_t *buf_1;
 	struct diagfwd_buf_t *buf_2;
 	struct diagfwd_buf_t *buf_upd[MAX_PERIPHERAL_UPD][2];
@@ -127,7 +113,7 @@ int diagfwd_cntl_register(uint8_t transport, uint8_t peripheral, void *ctxt,
 void diagfwd_deregister(uint8_t peripheral, uint8_t type, void *ctxt);
 
 int diagfwd_write(uint8_t peripheral, uint8_t type, void *buf, int len);
-void diagfwd_write_done(uint8_t peripheral, uint8_t type, int buf_num);
+void diagfwd_write_done(uint8_t peripheral, uint8_t type, int ctxt);
 void diagfwd_buffers_init(struct diagfwd_info *fwd_info);
 
 /*

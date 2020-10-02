@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -22,11 +22,8 @@
 #include <linux/workqueue.h>
 #include <linux/sched.h>
 #include <linux/device.h>
-#include <soc/qcom/smd.h>
 #include <linux/atomic.h>
 #include "diagfwd_bridge.h"
-
-#define THRESHOLD_CLIENT_LIMIT	50
 
 /* Size of the USB buffers used for read and write*/
 #define USB_MAX_OUT_BUF 4096
@@ -36,11 +33,7 @@
 
 #define DIAG_MAX_REQ_SIZE	(16 * 1024)
 #define DIAG_MAX_RSP_SIZE	(16 * 1024)
-#ifdef CONFIG_USB_CI13XXX_MSM
 #define APF_DIAG_PADDING	256
-#else
-#define APF_DIAG_PADDING	0
-#endif
 /*
  * In the worst case, the HDLC buffer can be atmost twice the size of the
  * original packet. Add 3 bytes for 16 bit CRC (2 bytes) and a delimiter
@@ -76,17 +69,12 @@
 #define DIAG_CON_CDSP		(0x0040)	/* Bit mask for CDSP */
 
 #define DIAG_CON_UPD_WLAN		(0x1000) /*Bit mask for WLAN PD*/
-#define DIAG_CON_UPD_AUDIO		(0x2000) /*Bit mask for AUDIO PD*/
-#define DIAG_CON_UPD_SENSORS	(0x4000) /*Bit mask for SENSORS PD*/
-
 #define DIAG_CON_NONE		(0x0000)	/* Bit mask for No SS*/
 #define DIAG_CON_ALL		(DIAG_CON_APSS | DIAG_CON_MPSS \
 				| DIAG_CON_LPASS | DIAG_CON_WCNSS \
 				| DIAG_CON_SENSORS | DIAG_CON_WDSP \
 				| DIAG_CON_CDSP)
-#define DIAG_CON_UPD_ALL	(DIAG_CON_UPD_WLAN \
-				| DIAG_CON_UPD_AUDIO \
-				| DIAG_CON_UPD_SENSORS)
+#define DIAG_CON_UPD_ALL	(DIAG_CON_UPD_WLAN)
 
 #define DIAG_STM_MODEM	0x01
 #define DIAG_STM_LPASS	0x02
@@ -226,23 +214,16 @@
 #define APPS_DATA		(NUM_PERIPHERALS)
 
 #define UPD_WLAN		7
-#define UPD_AUDIO		8
-#define UPD_SENSORS		9
-#define NUM_UPD			3
-
-#define MAX_PERIPHERAL_UPD			2
+#define NUM_UPD			1
+#define MAX_PERIPHERAL_UPD			1
 /* Number of sessions possible in Memory Device Mode. +1 for Apps data */
 #define NUM_MD_SESSIONS		(NUM_PERIPHERALS \
 					+ NUM_UPD + 1)
 
 #define MD_PERIPHERAL_MASK(x)	(1 << x)
 
-#define MD_PERIPHERAL_PD_MASK(x, peripheral, pd_mask)	\
-do {						\
-fwd_info = &peripheral_info[x][peripheral];	\
-for (i = 0; i <= fwd_info->num_pd - 2; i++)	\
-	pd_mask |= (1 << fwd_info->upd_diag_id[i].pd);\
-} while (0)
+#define MD_PERIPHERAL_PD_MASK(x)					\
+	((x == PERIPHERAL_MODEM) ? (1 << UPD_WLAN) : 0)\
 
 /*
  * Number of stm processors includes all the peripherals and
@@ -288,7 +269,6 @@ for (i = 0; i <= fwd_info->num_pd - 2; i++)	\
 #define DIAG_CNTL_TYPE		2
 #define DIAG_DCI_TYPE		3
 
-#define MAX_DCI_CLIENTS		10
 /*
  * List of diag ids
  * 0 is reserved for unknown diag id, 1 for apps, diag ids
@@ -326,8 +306,6 @@ struct diag_cmd_diag_id_query_req_t {
 struct diag_id_tbl_t {
 	struct list_head link;
 	uint8_t diag_id;
-	uint8_t pd_val;
-	uint8_t peripheral;
 	char *process_name;
 } __packed;
 struct diag_id_t {
@@ -474,17 +452,7 @@ struct diag_logging_mode_param_t {
 	uint32_t peripheral_mask;
 	uint32_t pd_mask;
 	uint8_t mode_param;
-	uint8_t diag_id;
-	uint8_t pd_val;
-	uint8_t reserved;
-	int peripheral;
 } __packed;
-
-struct diag_query_pid_t {
-	uint32_t peripheral_mask;
-	uint32_t pd_mask;
-	int pid;
-};
 
 struct diag_md_session_t {
 	int pid;
@@ -531,7 +499,6 @@ struct diag_feature_t {
 	uint8_t encode_hdlc;
 	uint8_t untag_header;
 	uint8_t peripheral_buffering;
-	uint8_t pd_buffering;
 	uint8_t mask_centralization;
 	uint8_t stm_support;
 	uint8_t sockets_enabled;
@@ -550,20 +517,20 @@ struct diagchar_dev {
 	struct class *diagchar_class;
 	struct device *diag_dev;
 	int ref_count;
+	int mask_clear;
+	struct mutex diag_maskclear_mutex;
 	struct mutex diag_notifier_mutex;
 	struct mutex diagchar_mutex;
 	struct mutex diag_file_mutex;
 	wait_queue_head_t wait_q;
 	struct diag_client_map *client_map;
 	int *data_ready;
-	atomic_t data_ready_notif[THRESHOLD_CLIENT_LIMIT];
 	int num_clients;
 	int polling_reg_flag;
 	int use_device_tree;
 	int supports_separate_cmdrsp;
 	int supports_apps_hdlc_encoding;
 	int supports_apps_header_untagging;
-	int supports_pd_buffering;
 	int peripheral_untag[NUM_PERIPHERALS];
 	int supports_sockets;
 	/* The state requested in the STM command */
@@ -586,7 +553,7 @@ struct diagchar_dev {
 	struct list_head dci_req_list;
 	struct list_head dci_client_list;
 	int dci_tag;
-	int dci_client_id[MAX_DCI_CLIENTS];
+	int dci_client_id;
 	struct mutex dci_mutex;
 	int num_dci_client;
 	unsigned char *apps_dci_buf;
@@ -603,7 +570,6 @@ struct diagchar_dev {
 	unsigned int poolsize_hdlc;
 	unsigned int poolsize_dci;
 	unsigned int poolsize_user;
-	spinlock_t diagmem_lock;
 	/* Buffers for masks */
 	struct mutex diag_cntl_mutex;
 	/* Members for Sending response */
@@ -618,8 +584,8 @@ struct diagchar_dev {
 	struct diagfwd_info *diagfwd_cmd[NUM_PERIPHERALS];
 	struct diagfwd_info *diagfwd_dci_cmd[NUM_PERIPHERALS];
 	struct diag_feature_t feature[NUM_PERIPHERALS];
-	struct diag_buffering_mode_t buffering_mode[NUM_MD_SESSIONS];
-	uint8_t buffering_flag[NUM_MD_SESSIONS];
+	struct diag_buffering_mode_t buffering_mode[NUM_PERIPHERALS];
+	uint8_t buffering_flag[NUM_PERIPHERALS];
 	struct mutex mode_lock;
 	unsigned char *user_space_data_buf;
 	uint8_t user_space_data_busy;
@@ -629,7 +595,6 @@ struct diagchar_dev {
 	/* buffer for updating mask to peripherals */
 	unsigned char *buf_feature_mask_update;
 	uint8_t hdlc_disabled;
-	uint8_t p_hdlc_disabled[NUM_MD_SESSIONS];
 	struct mutex hdlc_disable_mutex;
 	struct mutex hdlc_recovery_mutex;
 	struct timer_list hdlc_reset_timer;
@@ -654,7 +619,6 @@ struct diagchar_dev {
 	struct work_struct diag_drain_work;
 	struct work_struct update_user_clients;
 	struct work_struct update_md_clients;
-	struct work_struct diag_hdlc_reset_work;
 	struct workqueue_struct *diag_cntl_wq;
 	uint8_t log_on_demand_support;
 	uint8_t *apps_req_buf;
@@ -681,7 +645,6 @@ struct diagchar_dev {
 	struct diag_mask_info *log_mask;
 	struct diag_mask_info *event_mask;
 	struct diag_mask_info *build_time_mask;
-	uint8_t set_mask_cmd;
 	uint8_t msg_mask_tbl_count;
 	uint8_t bt_msg_mask_tbl_count;
 	uint16_t event_mask_size;
@@ -728,16 +691,12 @@ void diag_cmd_remove_reg_by_pid(int pid);
 void diag_cmd_remove_reg_by_proc(int proc);
 int diag_cmd_chk_polling(struct diag_cmd_reg_entry_t *entry);
 int diag_mask_param(void);
-void diag_clear_masks(int pid);
+void diag_clear_masks(struct diag_md_session_t *info);
 uint8_t diag_mask_to_pd_value(uint32_t peripheral_mask);
-int diag_query_pd(char *process_name);
-int diag_search_peripheral_by_pd(uint8_t pd_val);
-uint8_t diag_search_diagid_by_pd(uint8_t pd_val,
-	uint8_t *diag_id, int *peripheral);
+
 void diag_record_stats(int type, int flag);
 
 struct diag_md_session_t *diag_md_session_get_pid(int pid);
 struct diag_md_session_t *diag_md_session_get_peripheral(uint8_t peripheral);
-int diag_md_session_match_pid_peripheral(int pid, uint8_t peripheral);
 
 #endif
