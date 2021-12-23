@@ -1,4 +1,9 @@
 /*
+ * NOTE: This file has been modified by Sony Corporation.
+ * Modifications are Copyright 2021 Sony Corporation,
+ * and licensed under the license of the file.
+ */
+/*
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
@@ -7,13 +12,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- */
-/*
- * Copyright (C) 2019 Sony Mobile Communications Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -25,6 +23,7 @@
 #include <linux/of_device.h>
 #include <linux/of_gpio.h>
 #include <linux/gpio.h>
+#include <linux/hardware_info.h>
 
 struct sony_ext_uim_ctrl_drvdata {
 	struct device *dev;
@@ -32,15 +31,13 @@ struct sony_ext_uim_ctrl_drvdata {
 	struct device *device;
 	struct mutex lock;
 	int uim2_detect_en_gpio;
-#if !defined(CONFIG_ARCH_SONY_LENA)
-	int uim2_select_gpio;
-#endif
 	bool type;
 	bool is_set_once;
 	bool uim2_detect_en_status;
 };
 
 static struct sony_ext_uim_ctrl_drvdata *_drv;
+static char * pcb_name = NULL;
 
 static void sony_ext_uim_ctrl_gpio_set_value(int gpio, int value)
 {
@@ -51,13 +48,18 @@ static void sony_ext_uim_ctrl_gpio_set_value(int gpio, int value)
 	}
 
 	gpio_set_value(gpio, value);
-	pr_info("## %s: gpio=%d value=%d\n", __func__,
+	pr_err("## %s: gpio=%d value=%d\n", __func__,
 		gpio, value);
 }
 
 void sony_ext_uim_ctrl_set_uim2_detect_en(int value)
 {
 	struct sony_ext_uim_ctrl_drvdata *drv = _drv;
+
+	if(pcb_name && (strcmp(pcb_name, "QN1613A") != 0)){
+		pr_err("%s: PCB is not QN1613A, ignored\n",__func__);
+		return;
+	}
 
 	if (!drv) {
 		pr_err("%s: driver has not been initialized yet, ignored\n",
@@ -67,9 +69,9 @@ void sony_ext_uim_ctrl_set_uim2_detect_en(int value)
 
 	mutex_lock(&drv->lock);
 	drv->uim2_detect_en_status = !!value;
-	if (!drv->is_set_once || drv->type)
+	if (drv->is_set_once || drv->type) {
 		goto exit_func;
-
+	}
 	sony_ext_uim_ctrl_gpio_set_value(drv->uim2_detect_en_gpio, value);
 
 exit_func:
@@ -112,10 +114,6 @@ static ssize_t sony_ext_uim_ctrl_type_store(struct device *dev,
 	if (type) {
 		sony_ext_uim_ctrl_gpio_set_value(
 			drv->uim2_detect_en_gpio, 1);
-#if !defined(CONFIG_ARCH_SONY_LENA)
-		sony_ext_uim_ctrl_gpio_set_value(
-			drv->uim2_select_gpio, 1);
-#endif
 	} else {
 		sony_ext_uim_ctrl_gpio_set_value(
 			drv->uim2_detect_en_gpio,
@@ -180,17 +178,8 @@ static int sony_ext_uim_ctrl_probe(struct platform_device *pdev)
 	if (!gpio_is_valid(drv->uim2_detect_en_gpio))
 		pr_err("%s: gpio_is_valid(uim2_detect_en_gpio)=%d: invalid\n",
 			__func__, drv->uim2_detect_en_gpio);
-	pr_info("sony_ext_uim_ctrl: uim2_detect_en_gpio = %d\n",
+	pr_err("sony_ext_uim_ctrl: uim2_detect_en_gpio = %d\n",
 		drv->uim2_detect_en_gpio);
-
-#if !defined(CONFIG_ARCH_SONY_LENA)
-	drv->uim2_select_gpio = of_get_named_gpio(np, "uim2_select_gpio", 0);
-	if (!gpio_is_valid(drv->uim2_select_gpio))
-		pr_err("%s: gpio_is_valid(uim2_select_gpio)=%d: invalid\n",
-			__func__, drv->uim2_select_gpio);
-	pr_info("sony_ext_uim_ctrl: uim2_select_gpio = %d\n",
-		drv->uim2_select_gpio);
-#endif
 
 	drv->class = class_create(THIS_MODULE, "sony_ext_uim_ctrl");
 	if (IS_ERR(drv->class)) {
@@ -213,12 +202,13 @@ static int sony_ext_uim_ctrl_probe(struct platform_device *pdev)
 	mutex_init(&drv->lock);
 	_drv = drv;
 
-#if defined(CONFIG_ARCH_SONY_LENA)
-	sony_ext_uim_ctrl_gpio_set_value(drv->uim2_detect_en_gpio, 1);
-#else
-	sony_ext_uim_ctrl_gpio_set_value(drv->uim2_detect_en_gpio, 0);
-	sony_ext_uim_ctrl_gpio_set_value(drv->uim2_select_gpio, 0);
-#endif
+	pcb_name = get_type_name();
+	pr_err("%s: PCB is %s\n", __func__, pcb_name);
+	if(pcb_name && (strcmp(pcb_name, "QN1613D") == 0)){
+		sony_ext_uim_ctrl_gpio_set_value(drv->uim2_detect_en_gpio, 1);
+	} else {
+		sony_ext_uim_ctrl_gpio_set_value(drv->uim2_detect_en_gpio, 0);
+	}
 	return 0;
 
 probe_failed:
